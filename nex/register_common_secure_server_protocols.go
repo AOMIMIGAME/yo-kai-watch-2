@@ -3,7 +3,9 @@ package nex
 import (
 	//"fmt"
 
+	"github.com/PretendoNetwork/nex-go/v2"
 	"github.com/PretendoNetwork/nex-go/v2/types"
+	common_globals "github.com/PretendoNetwork/nex-protocols-common-go/v2/globals"
 	commonnattraversal "github.com/PretendoNetwork/nex-protocols-common-go/v2/nat-traversal"
 	commonsecure "github.com/PretendoNetwork/nex-protocols-common-go/v2/secure-connection"
 	nattraversal "github.com/PretendoNetwork/nex-protocols-go/v2/nat-traversal"
@@ -42,14 +44,19 @@ func registerCommonSecureServerProtocols() {
 
 	commonSecureProtocol.CreateReportDBRecord = CreateReportDBRecord
 
+
 	natTraversalProtocol := nattraversal.NewProtocol()
 	globals.SecureEndpoint.RegisterServiceProtocol(natTraversalProtocol)
 	commonnattraversal.NewCommonProtocol(natTraversalProtocol)
+
+	// * 試験用の中継。YW2_RELAY=true のときだけ
+	registerPacketRelay(secureProtocol, natTraversalProtocol)
 
 	matchMakingProtocol := matchmaking.NewProtocol()
 	globals.SecureEndpoint.RegisterServiceProtocol(matchMakingProtocol)
 	matchMakingProtocol.FindByOwner = local_match_making.FindByOwner
 	commonmatchmaking.NewCommonProtocol(matchMakingProtocol).SetManager(globals.MatchmakingManager)
+	registerVirtualHostURLs(matchMakingProtocol)
 
 	matchMakingExtProtocol := matchmakingext.NewProtocol()
 	globals.SecureEndpoint.RegisterServiceProtocol(matchMakingExtProtocol)
@@ -62,11 +69,31 @@ func registerCommonSecureServerProtocols() {
 	globals.SecureEndpoint.RegisterServiceProtocol(matchmakeExtensionProtocol)
 	commonMatchmakeExtensionProtocol := commonmatchmakeextension.NewCommonProtocol(matchmakeExtensionProtocol)
 	commonMatchmakeExtensionProtocol.SetManager(globals.MatchmakingManager)
+
+	// * エントリーしたイベントごとに、ランダム対戦の検索を分ける
+	registerEventSearch(matchmakeExtensionProtocol)
+
+	// * イベントの部屋には、フレンドでなくても入れる
+	commonMatchmakeExtensionProtocol.CanJoinMatchmakeSession = func(manager *common_globals.MatchmakingManager, pid types.PID, matchmakeSession matchmakingtypes.MatchmakeSession) *nex.Error {
+		if bool(matchmakeSession.OpenParticipation) && globals.IsEventRoomHost(uint32(matchmakeSession.OwnerPID)) {
+			return nil
+		}
+
+		// * 試験用: サーバーが持ち主を演じる部屋
+		if vhostOfRoom(uint32(matchmakeSession.ID)) != nil {
+			return nil
+		}
+
+		return common_globals.CanJoinMatchmakeSession(manager, pid, matchmakeSession)
+	}
 	matchmakeExtensionProtocol.GetMyBlockList = local_matchmake_extension.GetMyBlockList
 
 	messageDeliveryProtocol := messagedelivery.NewProtocol()
 	globals.SecureEndpoint.RegisterServiceProtocol(messageDeliveryProtocol)
 	commonmessagedelivery.NewCommonProtocol(messageDeliveryProtocol).SetManager(globals.MessagingManager)
+
+	// * 試験用: イベントの誘いを回す。YW2_EVENT_BOTS があるときだけ
+	registerEventInvites()
 
 	utilityProtocol := utility.NewProtocol()
 	globals.SecureEndpoint.RegisterServiceProtocol(utilityProtocol)

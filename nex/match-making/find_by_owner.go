@@ -1,6 +1,8 @@
 package nex_match_making
 
 import (
+	"fmt"
+
 	"github.com/PretendoNetwork/nex-go/v2"
 	"github.com/PretendoNetwork/nex-go/v2/types"
 	common_globals "github.com/PretendoNetwork/nex-protocols-common-go/v2/globals"
@@ -19,13 +21,33 @@ func FindByOwner(err error, packet nex.PacketInterface, callID uint32, id types.
 	connection := packet.Sender().(*nex.PRUDPConnection)
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
 
+	// * イベント用の偽のプレイヤーを探されたら、待っている人の部屋を返す
+	// * 試験用: サーバーが持ち主を演じる部屋。持ち主は偽のプレイヤーのままで、部屋は 1 人に 1 つ
+	virtualRoom, isVirtual := globals.EventVirtualHostRoom(uint32(connection.PID()), uint32(id))
+	if isVirtual {
+		fmt.Printf("[YW2-VHOST] pid=%d looked for room %d\n", uint32(connection.PID()), virtualRoom)
+	} else if globals.IsEventBot(uint32(id)) {
+		host, ok := globals.ClaimEventRoom(uint32(id), uint32(connection.PID()))
+		fmt.Printf("[YW2-EVENT] pid=%d looked for event %d: host=%d found=%v\n", uint32(connection.PID()), uint32(id), host, ok)
+		if ok {
+			id = types.PID(host)
+			globals.ClearEventEntry(uint32(connection.PID()))
+		}
+	}
+
 	globals.MatchmakingManager.Mutex.RLock()
 
-	gatheringIDs, nexError := nex_match_making_database.FindGatheringIDsByOwner(globals.MatchmakingManager, connection, id, resultRange)
-	if nexError != nil {
-		common_globals.Logger.Error(nexError.Error())
-		globals.MatchmakingManager.Mutex.RUnlock()
-		return nil, nexError
+	var gatheringIDs []uint32
+	var nexError *nex.Error
+	if isVirtual {
+		gatheringIDs = []uint32{virtualRoom}
+	} else {
+		gatheringIDs, nexError = nex_match_making_database.FindGatheringIDsByOwner(globals.MatchmakingManager, connection, id, resultRange)
+		if nexError != nil {
+			common_globals.Logger.Error(nexError.Error())
+			globals.MatchmakingManager.Mutex.RUnlock()
+			return nil, nexError
+		}
 	}
 
 	gatheringHolders := types.NewList[match_making_types.GatheringHolder]()
