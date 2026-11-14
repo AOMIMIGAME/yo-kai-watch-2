@@ -134,6 +134,8 @@ func (relay *packetRelay) assign(pid uint32, candidates []*net.UDPAddr) (*relayS
 		return station, nil
 	}
 
+	relayExhausted.Add(1)
+	fmt.Printf("[YW2-RELAY] no relay ports left for pid %d\n", pid)
 	return nil, fmt.Errorf("no relay ports left")
 }
 
@@ -355,6 +357,7 @@ func (relay *packetRelay) receive(destination *relayStation) {
 			if !safely("relay packet", func() {
 				history.fakeHealForTest(senderPID, data)
 				history.rewriteEventPacket(senderPID, data)
+				history.watchEventResult(senderPID, data)
 				history.onPacket(senderPID, data)
 			}) {
 				continue
@@ -502,8 +505,10 @@ func registerPacketRelay(secureProtocol *secure.Protocol, natTraversalProtocol *
 	})
 
 	go func() {
+		relay.saveStatus()
 		for now := range time.Tick(time.Minute) {
 			relay.releaseIdle(now)
+			relay.saveStatus()
 		}
 	}()
 

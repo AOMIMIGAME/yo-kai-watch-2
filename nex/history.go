@@ -83,13 +83,14 @@ type historyPlayer struct {
 }
 
 type battleHistory struct {
-	mutex      sync.Mutex
-	tables     historyTables
-	players    map[uint32]historyPlayer
-	modes      map[uint32]string    // * 今の対戦の種類。random、friend、event:<PID>[:<ルール>]
-	last       map[uint32][]byte    // * 同じ内容を何度も保存しない
-	partyAt    map[uint32]time.Time // * 今の部屋で最後にパーティが届いた時刻。連戦を見分ける
-	declinedAt map[uint32]time.Time // * 連戦を断ったことにした時刻
+	mutex       sync.Mutex
+	tables      historyTables
+	players     map[uint32]historyPlayer
+	modes       map[uint32]string    // * 今の対戦の種類。random、friend、event:<PID>[:<ルール>]
+	last        map[uint32][]byte    // * 同じ内容を何度も保存しない
+	partyAt     map[uint32]time.Time // * 今の部屋で最後にパーティが届いた時刻。連戦を見分ける
+	declinedAt  map[uint32]time.Time // * 連戦を断ったことにした時刻
+	resultSaved map[uint32]bool      // * 今の対戦で、イベントの勝敗を記録した（event_result.go）
 }
 
 var history *battleHistory
@@ -139,6 +140,9 @@ func startBattleHistory() {
 		ALTER TABLE history.players ADD COLUMN IF NOT EXISTS score_before bigint;
 		ALTER TABLE history.battles ADD COLUMN IF NOT EXISTS mode text;
 		ALTER TABLE history.battles ADD COLUMN IF NOT EXISTS cut_reason text;
+		ALTER TABLE history.battles ADD COLUMN IF NOT EXISTS state_pid bigint;
+		ALTER TABLE history.battles ADD COLUMN IF NOT EXISTS state_won boolean;
+		ALTER TABLE history.battles ADD COLUMN IF NOT EXISTS state_at timestamptz;
 		CREATE TABLE IF NOT EXISTS history.score_log (
 			id bigserial PRIMARY KEY,
 			pid bigint NOT NULL,
@@ -153,7 +157,7 @@ func startBattleHistory() {
 		return
 	}
 
-	history = &battleHistory{tables: tables, players: make(map[uint32]historyPlayer), modes: make(map[uint32]string), last: make(map[uint32][]byte), partyAt: make(map[uint32]time.Time), declinedAt: make(map[uint32]time.Time)}
+	history = &battleHistory{tables: tables, players: make(map[uint32]historyPlayer), modes: make(map[uint32]string), last: make(map[uint32][]byte), partyAt: make(map[uint32]time.Time), declinedAt: make(map[uint32]time.Time), resultSaved: make(map[uint32]bool)}
 	fmt.Printf("[YW2-HISTORY] enabled, %d species, %d items\n", len(tables.Species), len(tables.Items))
 }
 
@@ -260,6 +264,7 @@ func (h *battleHistory) setMode(pid uint32, mode string) {
 	defer h.mutex.Unlock()
 
 	h.modes[pid] = mode
+	delete(h.resultSaved, pid)
 }
 
 // * UpdateNotificationData の文字列（base64）の先頭 16 バイトが名前（Shift-JIS）

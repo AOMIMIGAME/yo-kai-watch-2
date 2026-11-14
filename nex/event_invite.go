@@ -21,9 +21,10 @@ const (
 	eventMessageCancel  = 1
 	eventMessageDecline = 2
 
-	eventInviteDelay      = 2 * time.Second        // * 待機が終わって画面が戻るまで待つ
+	eventInviteDelay      = 500 * time.Millisecond // * 誘われてから断るまで。テンポ優先で早く返す（2 秒から短くした。2026-11-13）
+	eventOfferDelay       = 1 * time.Second        // * 断ってから申し込むまで。画面がフィールドに戻るのを待つ
 	eventOfferLimit       = 60 * time.Second       // * 申し込みへの返事を待つ時間。フィールドに戻るまでの時間も含む
-	eventRuleDeclineDelay = 500 * time.Millisecond // * 違うルールの人への断り。正しい流れの断り（2 秒）より早く返す
+	eventRuleDeclineDelay = 500 * time.Millisecond // * 違うルールの人への断り（申し込みは出さない）
 	eventHoldLimit        = 25 * time.Minute       // * 部屋で待つ人をここで帰す。本体は 19 分以上待てた（46_部屋主の交代の計画.md）。部屋の記録は 30 分で消える
 	eventSyncEvery        = 5 * time.Second        // * 管理画面の開催と停止を読む間隔
 
@@ -72,12 +73,15 @@ func registerEventInvites() {
 	original := globals.MessagingManager.ProcessMessage
 
 	// * 偽のプレイヤーから本人へ送る
-	send := func(manager *common_globals.MessagingManager, message types.DataHolder, binaryMessage messaging_types.BinaryMessage, header messaging_types.UserMessage, bot uint32, target uint32, kind byte, sendMessage bool) {
+	sendNamed := func(manager *common_globals.MessagingManager, message types.DataHolder, binaryMessage messaging_types.BinaryMessage, header messaging_types.UserMessage, bot uint32, target uint32, kind byte, sendMessage bool, name string) {
 		binaryMessage.BinaryBody = types.QBuffer(eventInviteBody(binaryMessage.BinaryBody, kind))
 		message.Object = binaryMessage
 
 		header.PIDSender = types.PID(bot)
 		header.StrSender = types.String(strconv.FormatUint(uint64(bot), 10))
+		if name != "" {
+			header.StrSender = types.String(name)
+		}
 
 		forwarded, nexError := manager.SetMessageHeader(message, header)
 		if nexError != nil {
@@ -89,6 +93,9 @@ func registerEventInvites() {
 		if nexError != nil {
 			common_globals.Logger.Error(nexError.Error())
 		}
+	}
+	send := func(manager *common_globals.MessagingManager, message types.DataHolder, binaryMessage messaging_types.BinaryMessage, header messaging_types.UserMessage, bot uint32, target uint32, kind byte, sendMessage bool) {
+		sendNamed(manager, message, binaryMessage, header, bot, target, kind, sendMessage, "")
 	}
 
 	globals.MessagingManager.ProcessMessage = func(manager *common_globals.MessagingManager, message types.DataHolder, recipientIDs types.List[types.UInt64], recipientType messaging_constants.RecipientType, sendMessage bool) (types.DataHolder, types.List[types.UInt32], types.List[types.PID], *nex.Error) {
@@ -116,6 +123,26 @@ func registerEventInvites() {
 			return message, nil, nil, nil
 		}
 		noteEventMessage(player, bot, kind, binaryMessage.BinaryBody)
+
+		// * 紐付けの bot: 誘われたら断り、英数字の名前で誘い返す。返事が来たら英数字は無効
+		if linkTestBot != 0 && bot == linkTestBot {
+			if kind != eventMessageInvite {
+				dropLinkCode(player, fmt.Sprintf("reply kind=%d", kind))
+				return message, nil, nil, nil
+			}
+			code := linkCodeFor(player)
+			go func() {
+				time.Sleep(eventInviteDelay)
+				send(manager, message, binaryMessage, header, bot, player, eventMessageDecline, sendMessage)
+				time.Sleep(eventOfferDelay)
+				setLinkCode(player, code)
+				fmt.Printf("[YW2-LINK] pid=%d offered with sender name %s\n", player, code)
+				sendNamed(manager, message, binaryMessage, header, bot, player, eventMessageInvite, sendMessage, code)
+				time.Sleep(linkCodeLife)
+				dropLinkCode(player, "expired")
+			}()
+			return message, nil, nil, nil
+		}
 
 		// * 試験用: サーバーが持ち主を演じる部屋を用意して、本人に申し込む
 		if host := vhostOfInvite(player, bot); host != nil && kind == eventMessageInvite {
@@ -386,7 +413,7 @@ func noteEventMessage(player uint32, bot uint32, kind byte, body []byte) {
 func offerWaitingRoom(bot uint32, host uint32, entrant uint32, send func(target uint32, kind byte)) {
 	time.Sleep(eventInviteDelay)
 	send(entrant, eventMessageDecline)
-	time.Sleep(eventInviteDelay)
+	time.Sleep(eventOfferDelay)
 	send(entrant, eventMessageInvite)
 	fmt.Printf("[YW2-EVENT] offered waiting room of %d to %d in event %d\n", host, entrant, bot)
 

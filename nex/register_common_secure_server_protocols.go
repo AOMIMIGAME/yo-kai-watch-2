@@ -72,6 +72,7 @@ func registerCommonSecureServerProtocols() {
 
 	// * エントリーしたイベントごとに、ランダム対戦の検索を分ける
 	registerEventSearch(matchmakeExtensionProtocol)
+	registerLinkNotifications(matchmakeExtensionProtocol)
 
 	// * イベントの部屋には、フレンドでなくても入れる
 	commonMatchmakeExtensionProtocol.CanJoinMatchmakeSession = func(manager *common_globals.MatchmakingManager, pid types.PID, matchmakeSession matchmakingtypes.MatchmakeSession) *nex.Error {
